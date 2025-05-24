@@ -1,79 +1,59 @@
+import cv2
 import numpy as np
-import pandas as pd
-from sklearn.metrics import classification_report
-from sklearn.preprocessing import LabelEncoder
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.utils import to_categorical
-from sklearn.metrics import confusion_matrix
-import seaborn as sns
-import matplotlib.pyplot as plt
+from tensorflow.keras.models import load_model
 
 
-train = pd.read_csv("datas/archive/sign_mnist_train/sign_mnist_train.csv")
-test = pd.read_csv("datas/archive/sign_mnist_test/sign_mnist_test.csv")
+model_path = 'hand_recognition_model.h5'
+model = load_model(model_path)
 
-# Mise en place
-y_train = train['label'].values
-y_test = test['label'].values
-X_train = train.drop(['label'], axis=1).values
-X_test = test.drop(['label'], axis=1).values
+alphabet_mapper = {i: chr(65 + i) for i in range(26)}
 
-encoder = LabelEncoder()
-y_train = encoder.fit_transform(y_train)
-y_test = encoder.transform(y_test)
+def process_image(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    img_resized = cv2.resize(gray, (28, 28), interpolation=cv2.INTER_AREA)
+    img_normalized = img_resized / 255.0
+    return img_normalized
 
-# Normaliser les données
-X_train = X_train / 255.0
-X_test = X_test / 255.0
+def predict_hand_gesture(img_processed):
+    img_expanded = np.expand_dims(img_processed, axis=(0, -1))
+    output = model.predict(img_expanded, verbose=0)
+    predicted_index = np.argmax(output)
+    confidence = output[0][predicted_index]
+    return predicted_index, confidence
 
-X_train = X_train.reshape(-1, 28, 28, 1)
-X_test = X_test.reshape(-1, 28, 28, 1)
+cap = cv2.VideoCapture(0)
 
-# Conversion des étiquettes
-y_train = to_categorical(y_train)
-y_test = to_categorical(y_test)
+x, y, w, h = 800, 100, 300, 300
 
-# Modèle
-model = Sequential()
-model.add(Conv2D(32, kernel_size=(3, 3), activation='relu', input_shape=(28, 28, 1)))
-model.add(MaxPooling2D(pool_size=(2, 2)))
-model.add(Conv2D(64, kernel_size=(3, 3), activation='relu'))
-model.add(MaxPooling2D(pool_size=(2, 2)))
-model.add(Flatten())
-model.add(Dense(128, activation='relu'))
-model.add(Dropout(0.5))
-model.add(Dense(len(np.unique(y_train.argmax(axis=1))), activation='softmax'))
+last_prediction = ""
+display_until = 0
+confidence_threshold = 0.8
 
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
 
-model.compile(optimizer=Adam(lr=0.001), loss='categorical_crossentropy', metrics=['accuracy'])
-# Entraînement du modèle
-model.fit(X_train, y_train, batch_size=64, epochs=20, verbose=1, validation_data=(X_test, y_test))
+    frame = cv2.flip(frame, 1)
 
-# Évaluation du modèle
-_, accuracy = model.evaluate(X_test, y_test, verbose=0)
-print("Accuracy: %.2f%%" % (accuracy * 100))
-
-# Rapport de classification
-y_true = y_test.argmax(axis=1)
-y_pred = model.predict(X_test).argmax(axis=1)
-print(classification_report(y_true, y_pred))
+    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+    roi = frame[y:y + h, x:x + w]
+    img_processed = process_image(roi)
 
 
-cm = confusion_matrix(y_true, y_pred)
+    predicted_index, confidence = predict_hand_gesture(img_processed)
 
-# Matrice de confusion
-plt.figure(figsize=(10,10))
-sns.heatmap(cm, annot=True, fmt=".0f", linewidths=.5, square = True, cmap = 'Blues_r');
-plt.ylabel('Actual label');
-plt.xlabel('Predicted label');
+    if confidence > confidence_threshold:
+        last_prediction = alphabet_mapper[predicted_index]
+        display_until = cv2.getTickCount() + cv2.getTickFrequency() * 2  # Afficher 2 secondes
 
-# Calcul de la precision
-all_sample_title = 'Accuracy Score: {0}'.format(accuracy)
-plt.title(all_sample_title, size = 15);
-plt.show()
+    if cv2.getTickCount() < display_until:
+        cv2.putText(frame, f"Prediction: {last_prediction}", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
 
-# Sauvegarde du modèle
-model.save('model_keras.h5')
+    cv2.imshow("Hand Gesture Recognition", frame)
 
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
